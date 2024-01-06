@@ -1,12 +1,12 @@
 from typing import Dict, Optional, Tuple
 from pathlib import Path
-from datetime import datetime
 import flwr as fl
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import pandas as pd
-
+import matplotlib.pyplot as plt
+import os
 
 def main() -> None:
     # Load and compile model for
@@ -18,7 +18,7 @@ def main() -> None:
     #model.compile("adam", "sparse_categorical_crossentropy", metrics=["accuracy"])
 
     model = tf.keras.Sequential([
-        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=64, return_sequences=True), input_shape=(1, 15)),
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=64, return_sequences=True), input_shape=(1, 10)),
         tf.keras.layers.GRU(units=32, activation='relu'),
         tf.keras.layers.Dense(units=2)
     ])
@@ -38,10 +38,6 @@ def main() -> None:
         initial_parameters=fl.common.ndarrays_to_parameters(model.get_weights()),
     )
 
-    # Create a TensorBoard callback
-    log_dir = "logs/" + datetime.now().strftime("%Y%m%d-%H%M%S")
-    tensorboard_callback = tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1)
-
     # Start Flower server (SSL-enabled) for four rounds of federated learning
     fl.server.start_server(
         server_address="0.0.0.0:8080",
@@ -52,11 +48,25 @@ def main() -> None:
             Path(".cache/certificates/server.pem").read_bytes(),
             Path(".cache/certificates/server.key").read_bytes(),
         ),
-        tensorboard_callback=tensorboard_callback,  # Add the TensorBoard callback
     )
 
     # Save the trained model after the training is completed
     model_save_path = Path(".cache") / "trained_model"
+
+    # Check if the model file already exists, and replace it if necessary
+    if model_save_path.exists():
+        print("A trained model already exists. Replacing it.")
+        try:
+            os.remove(model_save_path)
+        except PermissionError as e:
+            print(f"Error removing existing model file: {e}")
+            # Handle the error as needed, e.g., by renaming the existing file
+            # or prompting the user for action.
+            # Example: os.rename(model_save_path, 'backup_model')
+    else:
+        print("No existing model file found.")
+
+    # Save the new model
     model.save(model_save_path)
 
 
@@ -69,10 +79,10 @@ def get_evaluate_fn(model):
     # Create features, labels, and client_ids from your preprocessed dataset
     scaler = StandardScaler()
 
-    scaled_features = scaler.fit_transform(df[['resource_request_cpus', 'resource_request_memory', 'poly_maximum_usage_cpus random_sample_usage_cpus',
-                                        'maximum_usage_cpus', 'poly_random_sample_usage_cpus', 'poly_random_sample_usage_cpus^2', 'memory_demand_lag_1',
-                                        'maximum_usage_memory', 'interaction_feature', 'poly_maximum_usage_cpus^2', 'memory_demand_rolling_mean',
-                                        'random_sample_usage_cpus', 'assigned_memory', 'poly_maximum_usage_cpus', 'memory_demand_rolling_std',
+    scaled_features = scaler.fit_transform(df[['resource_request_cpus', 'resource_request_memory', 
+                                        'maximum_usage_cpus', 'memory_demand_lag_1',
+                                        'maximum_usage_memory', 'interaction_feature',  'memory_demand_rolling_mean',
+                                        'random_sample_usage_cpus', 'assigned_memory',  'memory_demand_rolling_std',
                                         ]])
 
     labels = df[['average_usage_cpus', 'average_usage_memory']]
