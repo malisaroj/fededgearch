@@ -36,12 +36,44 @@ def main() -> None:
         tf.keras.layers.Dense(units=2, activation='linear')     
     ])  
 
-    '''
     model = tf.keras.Sequential([
         tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=True), input_shape=(1, 23)),
         tf.keras.layers.GRU(units=128, activation='relu'),
         tf.keras.layers.Dense(units=2, activation='linear')  
     ]) 
+    '''
+
+    # Custom Attention Layer
+    class AttentionLayer(tf.keras.layers.Layer):
+        def __init__(self):
+            super(AttentionLayer, self).__init__()
+
+        def build(self, input_shape):
+            self.W_a = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer='random_normal', trainable=True)
+            self.U_a = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer='random_normal', trainable=True)
+            self.v_a = self.add_weight(shape=(input_shape[-1], 1), initializer='random_normal', trainable=True)
+
+        def call(self, hidden_states):
+            # Score computation
+            score_first_part = tf.tensordot(hidden_states, self.W_a, axes=1)
+            h_t = tf.tensordot(hidden_states, self.U_a, axes=1)
+            score = tf.nn.tanh(score_first_part + h_t)
+            
+            # Attention weights
+            attention_weights = tf.nn.softmax(tf.tensordot(score, self.v_a, axes=1), axis=1)
+            
+            # Context vector computation
+            context_vector = tf.reduce_sum(attention_weights * hidden_states, axis=1)
+            return context_vector
+
+    # Define the model using TensorFlow layers
+    model = tf.keras.Sequential([
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=True), input_shape=(1, 23)),
+        AttentionLayer(),  # Custom attention layer
+        tf.keras.layers.Reshape((1, 1024)),  # Reshape to add the timestep dimension
+        tf.keras.layers.GRU(units=128, activation='relu', return_sequences=False),
+        tf.keras.layers.Dense(units=2, activation='linear')  
+    ])
 
     model.compile("adam", "mean_squared_error", metrics=["accuracy"])
     #model.compile(optimizer='adam', loss='mean_squared_error', metrics=['mae', tf.keras.metrics.RootMeanSquaredError(name='rmse')])
