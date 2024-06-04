@@ -11,6 +11,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import pandas as pd
 
+import numpy as np
+from keras.utils import pad_sequences
 
 # Make TensorFlow logs less verbose
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -159,7 +161,7 @@ def main() -> None:
 
     # Define the model using TensorFlow layers
     model = tf.keras.Sequential([
-        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=True), input_shape=(1, 23)),
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=True), input_shape=(1, 43)),
         AttentionLayer(),  # Custom attention layer
         tf.keras.layers.Reshape((1, 1024)),  # Reshape to add the timestep dimension
         tf.keras.layers.GRU(units=128, activation='relu', return_sequences=False),
@@ -194,8 +196,20 @@ def load_partition(idx: int):
     # Read the entire dataset
     df = pd.read_csv("preprocessed_data.csv")
 
-    # Create features, labels, and client_ids from your preprocessed dataset
+    df['cpu_usage_distribution'] = df['cpu_usage_distribution'].apply(lambda x: np.fromstring(x.strip('[]'), sep=' '))
+    df['tail_cpu_usage_distribution'] = df['tail_cpu_usage_distribution'].apply(lambda x: np.fromstring(x.strip('[]'), sep=' '))
+
+    # Padding sequences
+    max_seq_length = df['cpu_usage_distribution'].apply(len).max()  # Find the maximum length of sequences
+    df['cpu_usage_distribution_padded'] = df['cpu_usage_distribution'].apply(lambda x: pad_sequences([x], maxlen=max_seq_length, padding='post', dtype='float32')[0])
+    tail_max_seq_length = df['tail_cpu_usage_distribution'].apply(len).max()  # Find the maximum length of sequences
+    df['tail_cpu_usage_distribution_padded'] = df['tail_cpu_usage_distribution'].apply(lambda x: pad_sequences([x], maxlen=tail_max_seq_length, padding='post', dtype='float32')[0])
+
+    # Feature Scaling
     scaler = StandardScaler()
+    df['cpu_usage_distribution_scaled'] = df['cpu_usage_distribution_padded'].apply(lambda x: scaler.fit_transform(x.reshape(-1, 1)))
+    df['tail_cpu_usage_distribution_scaled'] = df['tail_cpu_usage_distribution_padded'].apply(lambda x: scaler.fit_transform(x.reshape(-1, 1)))
+
     scaled_features = scaler.fit_transform(df[[ 'resource_request_cpus', 'resource_request_memory',  'poly_maximum_usage_cpus random_sample_usage_cpus', 
                                                 'maximum_usage_cpus',  'poly_random_sample_usage_cpus', 'poly_random_sample_usage_cpus^2', 'memory_demand_rolling_mean',
                                                 'maximum_usage_memory',  'interaction_feature', 'poly_maximum_usage_cpus^2', 'memory_demand_lag_1',
@@ -203,21 +217,43 @@ def load_partition(idx: int):
                                                 'start_hour', 'start_dayofweek', 'duration_seconds', 'sample_rate', 'cycles_per_instruction', 
                                                 'memory_accesses_per_instruction', 'page_cache_memory', 'priority',
                                             ]])
+
+    # Labels
     labels = df[['average_usage_cpus', 'average_usage_memory']]
 
+    # Convert numpy arrays to pandas DataFrames
+    scaled_features_df = pd.DataFrame(scaled_features, columns=[
+        'resource_request_cpus', 'resource_request_memory', 'poly_maximum_usage_cpus random_sample_usage_cpus',
+        'maximum_usage_cpus', 'poly_random_sample_usage_cpus', 'poly_random_sample_usage_cpus^2', 'memory_demand_rolling_mean',
+        'maximum_usage_memory', 'interaction_feature', 'poly_maximum_usage_cpus^2', 'memory_demand_lag_1',
+        'random_sample_usage_cpus', 'assigned_memory', 'poly_maximum_usage_cpus', 'memory_demand_rolling_std',
+        'start_hour', 'start_dayofweek', 'duration_seconds', 'sample_rate', 'cycles_per_instruction',
+        'memory_accesses_per_instruction', 'page_cache_memory', 'priority'])
 
-    # Split the dataset into training and testing sets
-    x_train, x_test, y_train, y_test = train_test_split(scaled_features, labels, test_size=0.2, random_state=42)
-    #(x_train, y_train), (x_test, y_test) = tf.keras.datasets.cifar10.load_data()
+    # Reshape the data to 2D array
+    cpu_usage_reshaped = np.vstack(df['cpu_usage_distribution_scaled']).reshape(-1, max_seq_length)
+    tail_cpu_usage_reshaped = np.vstack(df['tail_cpu_usage_distribution_scaled']).reshape(-1, tail_max_seq_length)
+
+    # Create DataFrame
+    cpu_usage_df = pd.DataFrame(cpu_usage_reshaped, columns=[f'cpu_usage_{i}' for i in range(max_seq_length)])
+    tail_cpu_usage_df = pd.DataFrame(tail_cpu_usage_reshaped, columns=[f'tail_cpu_usage_{i}' for i in range(tail_max_seq_length)])
+
+    # Concatenate all DataFrames
+    scaled_features_concatenated = pd.concat([cpu_usage_df, tail_cpu_usage_df, scaled_features_df], axis=1)
+
+    # Split the dataset into training, validation, and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(scaled_features_concatenated, labels, test_size=0.2, random_state=42)
+
     # Convert NumPy arrays back to TensorFlow tensors
-    x_train = tf.constant(x_train, dtype=tf.float32)
-    x_test = tf.constant(x_test, dtype=tf.float32)
+    X_train = tf.constant(X_train, dtype=tf.float32)
+    X_test = tf.constant(X_test, dtype=tf.float32)
     y_train = tf.constant(y_train, dtype=tf.float32)
     y_test = tf.constant(y_test, dtype=tf.float32)
 
     # Reshape the input features to add a third dimension for time steps
-    x_train_reshaped = tf.reshape(x_train, (x_train.shape[0], 1, x_train.shape[1]))
-    x_test_reshaped = tf.reshape(x_test, (x_test.shape[0], 1, x_test.shape[1]))
+    x_train_reshaped = tf.reshape(X_train, (X_train.shape[0], 1, X_train.shape[1]))
+    x_test_reshaped = tf.reshape(X_test, (X_test.shape[0], 1, X_test.shape[1]))
+
 
     return (
         x_train_reshaped[idx * 30000 : (idx + 1) * 30000],
