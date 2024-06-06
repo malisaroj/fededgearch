@@ -13,6 +13,7 @@ import pandas as pd
 
 import numpy as np
 from keras.utils import pad_sequences
+from tensorflow.keras.initializers import GlorotUniform
 
 # Make TensorFlow logs less verbose
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -111,40 +112,41 @@ def main() -> None:
     #    input_shape=(32, 32, 3), weights=None, classes=10
     #)
     '''
-    # Model with only GRU layer
+    # Model with only Bidirectional GRU layer
     model = tf.keras.Sequential([
-        tf.keras.layers.GRU(units=128, activation='relu', input_shape=(1, 15)),
-        tf.keras.layers.Dense(units=2, activation='linear')  
+        tf.keras.layers.Bidirectional(tf.keras.layers.GRU(units=512, return_sequences=False), input_shape=(1, 43)),
+        tf.keras.layers.Dense(units=2, activation='sigmoid')
     ])
 
     # Model with only Bidirectional LSTM layer
     model = tf.keras.Sequential([
-        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=False), input_shape=(1, 15)),
-        tf.keras.layers.Dense(units=2, activation='linear')  
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=False), input_shape=(1, 43)),
+        tf.keras.layers.Dense(units=2, activation='sigmoid')  
     ])
 
+    # Model with only LSTM layer
     model = tf.keras.Sequential([
-        tf.keras.layers.LSTM(units=512, return_sequences=True, input_shape=(1, 15)),
-        tf.keras.layers.LSTM(units=128, activation='relu'),
-        tf.keras.layers.Dense(units=2, activation='linear')
+        tf.keras.layers.LSTM(units=512, activation='relu', input_shape=(1, 43)),
+        tf.keras.layers.Dense(units=2, activation='sigmoid')  # Output layer with sigmoid activation for regression
     ])
 
+    # Model without attention mechanism 
     model = tf.keras.Sequential([
-        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=True), input_shape=(1, 23)),
-        tf.keras.layers.GRU(units=128, activation='relu'),
-        tf.keras.layers.Dense(units=2, activation='linear')  
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=True), input_shape=(1, 43)),
+        tf.keras.layers.GRU(units=128, activation='tanh'),
+        tf.keras.layers.Dense(units=2, activation='sigmoid')  
     ]) 
-    '''
 
+    # Model with attention mechanism
     # Custom Attention Layer
     class AttentionLayer(tf.keras.layers.Layer):
         def __init__(self):
             super(AttentionLayer, self).__init__()
 
         def build(self, input_shape):
-            self.W_a = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer='random_normal', trainable=True)
-            self.U_a = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer='random_normal', trainable=True)
-            self.v_a = self.add_weight(shape=(input_shape[-1], 1), initializer='random_normal', trainable=True)
+            self.W_a = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer=GlorotUniform(), trainable=True)
+            self.U_a = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer=GlorotUniform(), trainable=True)
+            self.v_a = self.add_weight(shape=(input_shape[-1], 1), initializer=GlorotUniform(), trainable=True)
 
         def call(self, hidden_states):
             # Score computation
@@ -164,13 +166,20 @@ def main() -> None:
         tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=True), input_shape=(1, 43)),
         AttentionLayer(),  # Custom attention layer
         tf.keras.layers.Reshape((1, 1024)),  # Reshape to add the timestep dimension
-        tf.keras.layers.GRU(units=128, activation='relu', return_sequences=False),
-        tf.keras.layers.Dense(units=2, activation='linear')  
+        tf.keras.layers.GRU(units=128, activation='tanh', return_sequences=False),
+        tf.keras.layers.Dropout(0.2),  # Adding dropout layer
+        tf.keras.layers.Dense(units=2, activation='sigmoid')  
+    ])
+    '''
+
+    # Model with only GRU layer
+    model = tf.keras.Sequential([
+        tf.keras.layers.GRU(units=512, activation='tanh', input_shape=(1, 43)),
+        tf.keras.layers.Dense(units=2, activation='sigmoid')  
     ])
 
-    model.compile("adam", "mean_squared_error", metrics=["accuracy"])
-    #model.compile(optimizer='adam', loss='mean_squared_error', metrics=['mae', tf.keras.metrics.RootMeanSquaredError(name='rmse')])
 
+    model.compile("adam", "mean_squared_error", metrics=["accuracy"])
 
     # Load a subset of dataset to simulate the local data partition
     (x_train, y_train), (x_test, y_test) = load_partition(args.partition)

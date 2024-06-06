@@ -7,8 +7,11 @@ from sklearn.preprocessing import StandardScaler
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+from pathlib import Path
 import numpy as np
 from keras.utils import pad_sequences
+from sklearn.metrics import mean_squared_error, mean_absolute_error, mean_squared_log_error, r2_score, explained_variance_score
+from tensorflow.keras.initializers import GlorotUniform
 
 def main() -> None:
     # Load and compile model for
@@ -19,40 +22,41 @@ def main() -> None:
     #)
     #model.compile("adam", "sparse_categorical_crossentropy", metrics=["accuracy"])
     '''
-    # Model with only GRU layer
+    # Model with only Bidirectional GRU layer
     model = tf.keras.Sequential([
-        tf.keras.layers.GRU(units=128, activation='relu', input_shape=(1, 15)),
-        tf.keras.layers.Dense(units=2, activation='linear')  
+        tf.keras.layers.Bidirectional(tf.keras.layers.GRU(units=512, return_sequences=False), input_shape=(1, 43)),
+        tf.keras.layers.Dense(units=2, activation='sigmoid')
     ])
 
     # Model with only Bidirectional LSTM layer
     model = tf.keras.Sequential([
-        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=False), input_shape=(1, 15)),
-        tf.keras.layers.Dense(units=2, activation='linear')  
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=False), input_shape=(1, 43)),
+        tf.keras.layers.Dense(units=2, activation='sigmoid')  
     ])
 
+    # Model with only LSTM layer
     model = tf.keras.Sequential([
-        tf.keras.layers.LSTM(units=512, return_sequences=True, input_shape=(1, 15)),
-        tf.keras.layers.LSTM(units=128, activation='relu'),
-        tf.keras.layers.Dense(units=2, activation='linear')     
-    ])  
+        tf.keras.layers.LSTM(units=512, activation='relu', input_shape=(1, 43)),
+        tf.keras.layers.Dense(units=2, activation='sigmoid')  # Output layer with sigmoid activation for regression
+    ])
 
+    # Model without attention mechanism 
     model = tf.keras.Sequential([
-        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=True), input_shape=(1, 23)),
-        tf.keras.layers.GRU(units=128, activation='relu'),
-        tf.keras.layers.Dense(units=2, activation='linear')  
+        tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=True), input_shape=(1, 43)),
+        tf.keras.layers.GRU(units=128, activation='tanh'),
+        tf.keras.layers.Dense(units=2, activation='sigmoid')  
     ]) 
-    '''
-
+   
+    # Model with attention mechanism
     # Custom Attention Layer
     class AttentionLayer(tf.keras.layers.Layer):
         def __init__(self):
             super(AttentionLayer, self).__init__()
 
         def build(self, input_shape):
-            self.W_a = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer='random_normal', trainable=True)
-            self.U_a = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer='random_normal', trainable=True)
-            self.v_a = self.add_weight(shape=(input_shape[-1], 1), initializer='random_normal', trainable=True)
+            self.W_a = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer=GlorotUniform(), trainable=True)
+            self.U_a = self.add_weight(shape=(input_shape[-1], input_shape[-1]), initializer=GlorotUniform(), trainable=True)
+            self.v_a = self.add_weight(shape=(input_shape[-1], 1), initializer=GlorotUniform(), trainable=True)
 
         def call(self, hidden_states):
             # Score computation
@@ -72,12 +76,18 @@ def main() -> None:
         tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(units=512, return_sequences=True), input_shape=(1, 43)),
         AttentionLayer(),  # Custom attention layer
         tf.keras.layers.Reshape((1, 1024)),  # Reshape to add the timestep dimension
-        tf.keras.layers.GRU(units=128, activation='relu', return_sequences=False),
-        tf.keras.layers.Dense(units=2, activation='linear')  
+        tf.keras.layers.GRU(units=128, activation='tanh', return_sequences=False),
+        tf.keras.layers.Dropout(0.2),  # Adding dropout layer
+        tf.keras.layers.Dense(units=2, activation='sigmoid')  
+    ])
+    '''
+    # Model with only GRU layer
+    model = tf.keras.Sequential([
+        tf.keras.layers.GRU(units=512, activation='tanh', input_shape=(1, 43)),
+        tf.keras.layers.Dense(units=2, activation='sigmoid')  
     ])
 
     model.compile("adam", "mean_squared_error", metrics=["accuracy"])
-    #model.compile(optimizer='adam', loss='mean_squared_error', metrics=['mae', tf.keras.metrics.RootMeanSquaredError(name='rmse')])
 
     # Create strategy
     strategy = fl.server.strategy.FedAvg(
@@ -105,27 +115,33 @@ def main() -> None:
     )
 
     # Save the trained model after the training is completed
-    model_save_path = Path(".cache") / "trained_model.h5"
+    model_save_path  = Path(".cache")
+    model_file = model_save_path / "trained_model.h5"
 
     # Check if the model file already exists, and replace it if necessary
-    if model_save_path.exists():
+    if model_file.exists():
         print("A trained model already exists. Replacing it.")
         try:
-            os.remove(model_save_path)
+            model_file.unlink()  # This removes the file
         except PermissionError as e:
             print(f"Error removing existing model file: {e}")
             # Handle the error as needed, e.g., by renaming the existing file
-            # or prompting the user for action.
-            # Example: os.rename(model_save_path, 'backup_model')
+            backup_file = model_save_path / "backup_trained_model.h5"
+            model_file.rename(backup_file)
+            print(f"Existing model file has been renamed to {backup_file}")
     else:
         print("No existing model file found.")
+
+    # Save the new model
+    model.save(model_file)
+    print(f"Model saved to {model_file}")
 
     # Save the new model
     model.save(os.path.join(model_save_path, "trained_model.h5"))
 
     # Plot the metrics
-    plot_metrics(eval_loss, eval_accuracy)
-
+    # Call this function passing all evaluation metrics lists as arguments after federated learning completes.
+    plot_metrics(eval_loss, eval_accuracy, eval_mae, eval_rmse, eval_r2, eval_msle, eval_variance)
 
 def get_evaluate_fn(model):
 
@@ -205,9 +221,27 @@ def get_evaluate_fn(model):
         config: Dict[str, fl.common.Scalar],
     ) -> Optional[Tuple[float, Dict[str, fl.common.Scalar]]]:
         model.set_weights(parameters)  # Update model with the latest parameters
+        predictions = model.predict(x_val)
+        
+        # Calculate additional metrics
+        mae = mean_absolute_error(y_val, predictions)
+        rmse = np.sqrt(mean_squared_error(y_val, predictions))
+        r2 = r2_score(y_val, predictions)
+        msle = mean_squared_log_error(y_val, predictions)
+        variance = explained_variance_score(y_val, predictions)
+
+        # Append the additional metrics to their respective lists
+        eval_mae.append(mae)
+        eval_rmse.append(rmse)
+        eval_r2.append(r2)
+        eval_msle.append(msle)
+        eval_variance.append(variance)
+
+        # Return MSE and accuracy as before
         loss, accuracy = model.evaluate(x_val, y_val)
         eval_loss.append(loss)
         eval_accuracy.append(accuracy)
+
         return loss, {"accuracy": accuracy}
 
     return evaluate
@@ -232,25 +266,56 @@ def evaluate_config(server_round: int):
     Perform five local evaluation steps on each client (i.e., use five batches) during
     rounds one to three, then increase to ten local evaluation steps.
     """
-    val_steps = 5 if server_round < 4 else 20
+    val_steps = 5 if server_round < 4 else 10
     return {"val_steps": val_steps}
 
-def plot_metrics(eval_loss, eval_accuracy):
+def plot_metrics(eval_loss, eval_accuracy, eval_mae, eval_rmse, eval_r2, eval_msle, eval_variance):
     rounds = np.arange(1, len(eval_loss) + 1)
 
-    plt.figure(figsize=(12, 6))
+    plt.figure(figsize=(18, 12))
 
-    plt.subplot(1, 2, 1)
+    plt.subplot(3, 3, 1)
     plt.plot(rounds, eval_loss)
     plt.xlabel("Round")
-    plt.ylabel("Evaluation Loss")
-    plt.title("Evaluation Loss over Rounds")
+    plt.ylabel("Evaluation Loss (MSE)")
+    plt.title("Evaluation Loss (MSE) over Rounds")
 
-    plt.subplot(1, 2, 2)
+    plt.subplot(3, 3, 2)
     plt.plot(rounds, eval_accuracy)
     plt.xlabel("Round")
     plt.ylabel("Evaluation Accuracy")
     plt.title("Evaluation Accuracy over Rounds")
+
+    plt.subplot(3, 3, 3)
+    plt.plot(rounds, eval_mae)
+    plt.xlabel("Round")
+    plt.ylabel("Mean Absolute Error (MAE)")
+    plt.title("Mean Absolute Error (MAE) over Rounds")
+
+    plt.subplot(3, 3, 4)
+    plt.plot(rounds, eval_rmse)
+    plt.xlabel("Round")
+    plt.ylabel("Root Mean Squared Error (RMSE)")
+    plt.title("Root Mean Squared Error (RMSE) over Rounds")
+
+    plt.subplot(3, 3, 5)
+    plt.plot(rounds, eval_msle)
+    plt.xlabel("Round")
+    plt.ylabel("Mean Squared Logarithmic Error (MSLE)")
+    plt.title("Mean Squared Logarithmic Error (MSLE) over Rounds")
+
+    plt.subplot(3, 3, 6)
+    plt.plot(rounds, eval_variance)
+    plt.xlabel("Round")
+    plt.ylabel("Explained Variance Score")
+    plt.title("Explained Variance Score over Rounds")
+
+    plt.subplot(3, 3, 7)
+    plt.plot(rounds, eval_r2)
+    plt.xlabel("Round")
+    plt.ylabel("R2")
+    plt.title("R2 over Rounds")
+
 
     plt.tight_layout()
     plt.show()
@@ -259,4 +324,10 @@ if __name__ == "__main__":
     # Initialize lists to store loss and accuracy
     eval_loss = []
     eval_accuracy = []
+    # Initialize lists to store additional evaluation metrics
+    eval_mae = []
+    eval_rmse = []
+    eval_r2 = []
+    eval_msle = []
+    eval_variance = []
     main()
